@@ -39,7 +39,10 @@ def clean(v):
     if v is None: return ''
     if isinstance(v, float) and math.isnan(v): return ''
     s = str(v).strip()
-    return '' if s in ('nan','None','NaT') else s
+    if s in ('nan','None','NaT'): return ''
+    # 제어문자 제거 (줄바꿈은 \n으로 유지)
+    s = ''.join(ch if ch == '\n' or ord(ch) >= 32 else ' ' for ch in s)
+    return s
 
 def calc_val_range(pre):
     """Pre 기업가치 기준으로 0~150, 150~360 자동 판별"""
