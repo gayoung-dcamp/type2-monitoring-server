@@ -42,6 +42,10 @@ def clean(v):
     if s in ('nan','None','NaT'): return ''
     # 제어문자 제거 (줄바꿈은 \n으로 유지)
     s = ''.join(ch if ch == '\n' or ord(ch) >= 32 else ' ' for ch in s)
+    # JSON 파싱 오류 유발하는 특수 따옴표 → 일반 따옴표로 변환
+    s = s.replace('\u201c', "'").replace('\u201d', "'")  # "" → ''
+    s = s.replace('\u2018', "'").replace('\u2019', "'")  # '' → ''
+    s = s.replace('"', "'")  # 큰따옴표 → 작은따옴표
     return s
 
 def calc_val_range(pre):
