@@ -148,7 +148,18 @@ def get_data():
 
             records.append(record)
 
-        return jsonify({'success': True, 'data': records, 'count': len(records)})
+        # JSON 직렬화 테스트 - 문제 행 찾기
+        import json
+        safe_records = []
+        for rec in records:
+            try:
+                json.dumps(rec, ensure_ascii=False)
+                safe_records.append(rec)
+            except Exception as e:
+                # 문제 행은 스킵하고 로그에 기록
+                print(f"JSON 직렬화 오류 (No.{rec.get('No.','?')} {rec.get('투자기업명','?')}): {e}")
+
+        return jsonify({'success': True, 'data': safe_records, 'count': len(safe_records), 'total_read': len(records)})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
