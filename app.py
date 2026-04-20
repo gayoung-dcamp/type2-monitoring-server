@@ -203,6 +203,9 @@ def update_row(row_no):
         # 업데이트할 셀 목록 작성
         updates = []
         pre_val = None
+        # 사용자가 구간값(0~150, 150~360)을 명시적으로 보냈는지 추적
+        user_sent_0_150 = '기업가치(0~150억원)' in body
+        user_sent_150_360 = '기업가치(150~360억원)' in body
 
         for field, value in body.items():
             # 읽기 전용 컬럼은 건너뜀
@@ -215,10 +218,15 @@ def update_row(row_no):
                 if field == '기업가치(Pre, 억원)':
                     pre_val = value
 
-        # Pre 값이 바뀌면 X/Y열 자동 업데이트
+        # Pre 값이 바뀌면 X/Y열 자동 계산 (단, 사용자가 해당 값을 명시하지 않은 경우에만)
         if pre_val is not None:
             v0_150, v150_360 = calc_val_range(pre_val)
-            for field, val in [('기업가치(0~150억원)', v0_150), ('기업가치(150~360억원)', v150_360)]:
+            auto_updates = []
+            if not user_sent_0_150:
+                auto_updates.append(('기업가치(0~150억원)', v0_150))
+            if not user_sent_150_360:
+                auto_updates.append(('기업가치(150~360억원)', v150_360))
+            for field, val in auto_updates:
                 if field in headers:
                     col_idx = headers.index(field) + 1
                     updates.append({'row': target_row_idx, 'col': col_idx, 'value': val})
@@ -264,13 +272,16 @@ def add_row():
                 col_idx = headers.index(field)
                 new_row[col_idx] = value
 
-        # Pre 기준 기업가치 구간 자동 계산
+        # Pre 기준 기업가치 구간 자동 계산 (단, 사용자가 해당 값을 빈 값이 아닌 값으로 명시한 경우 존중)
         pre_val = body.get('기업가치(Pre, 억원)', '')
+        user_sent_0_150 = body.get('기업가치(0~150억원)', '').strip() != ''
+        user_sent_150_360 = body.get('기업가치(150~360억원)', '').strip() != ''
         if pre_val:
             v0_150, v150_360 = calc_val_range(pre_val)
-            for field, val in [('기업가치(0~150억원)', v0_150), ('기업가치(150~360억원)', v150_360)]:
-                if field in headers:
-                    new_row[headers.index(field)] = val
+            if not user_sent_0_150 and '기업가치(0~150억원)' in headers:
+                new_row[headers.index('기업가치(0~150억원)')] = v0_150
+            if not user_sent_150_360 and '기업가치(150~360억원)' in headers:
+                new_row[headers.index('기업가치(150~360억원)')] = v150_360
 
         # 데이터 마지막 행 다음에 추가
         ws.append_row(new_row, value_input_option='USER_ENTERED')
