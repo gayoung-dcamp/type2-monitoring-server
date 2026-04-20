@@ -5,7 +5,12 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, origins=[
+    'https://gayoung-dcamp.github.io',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'null'  # 로컬 파일 접근
+], supports_credentials=False)
 
 # ── 구글 시트 연결 ──────────────────────────────────────────
 SHEET_ID = '15AnatVs4sauXt2FXLkqVzpmyTtVdpGRNTjmVx7VKoZ0'
