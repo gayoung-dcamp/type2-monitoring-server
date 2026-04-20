@@ -118,20 +118,21 @@ def health():
 def get_data():
     """구글 시트 전체 데이터 읽기"""
     try:
+        import sys, traceback
+        print("=== /api/data 요청 시작 ===", flush=True)
         ws = get_sheet()
+        print("=== 시트 연결 성공 ===", flush=True)
         all_values = ws.get_all_values()
+        print(f"=== 전체 행 수: {len(all_values)} ===", flush=True)
 
-        # 헤더 행 찾기 (10번째 행 = 인덱스 9)
         header_row_idx = HEADER_ROW - 1
         headers = all_values[header_row_idx]
 
         records = []
         for row in all_values[header_row_idx + 1:]:
-            # 투자기업명(G열=인덱스 6)이 있는 행만 처리
             company_val = row[6].strip() if len(row) > 6 else ''
             if not company_val:
                 continue
-            # No. 값 (없으면 빈값 허용, 단 '-'이면 스킵)
             no_val = row[0].strip() if row else ''
             if no_val == '-':
                 continue
@@ -143,7 +144,6 @@ def get_data():
                 val = row[i] if i < len(row) else ''
                 record[header] = clean(val)
 
-            # Pre 기준 기업가치 구간 자동 계산 (X, Y열이 비어있으면 채워줌)
             pre = record.get('기업가치(Pre, 억원)', '')
             if pre and record.get('기업가치(0~150억원)', '') == '':
                 v0_150, v150_360 = calc_val_range(pre)
@@ -152,7 +152,8 @@ def get_data():
 
             records.append(record)
 
-        # JSON 직렬화 테스트 - 문제 행 찾기
+        print(f"=== 읽은 레코드 수: {len(records)} ===", flush=True)
+
         import json
         safe_records = []
         for rec in records:
@@ -160,11 +161,14 @@ def get_data():
                 json.dumps(rec, ensure_ascii=False)
                 safe_records.append(rec)
             except Exception as e:
-                # 문제 행은 스킵하고 로그에 기록
-                print(f"JSON 직렬화 오류 (No.{rec.get('No.','?')} {rec.get('투자기업명','?')}): {e}")
+                print(f"JSON 오류 (No.{rec.get('No.','?')} {rec.get('투자기업명','?')}): {e}", flush=True)
 
-        return jsonify({'success': True, 'data': safe_records, 'count': len(safe_records), 'total_read': len(records)})
+        print(f"=== 최종 반환: {len(safe_records)}건 ===", flush=True)
+        return jsonify({'success': True, 'data': safe_records, 'count': len(safe_records)})
     except Exception as e:
+        import traceback
+        print(f"=== 오류 발생: {str(e)} ===", flush=True)
+        print(traceback.format_exc(), flush=True)
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
