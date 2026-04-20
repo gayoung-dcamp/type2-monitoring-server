@@ -120,12 +120,13 @@ def get_data():
 
         records = []
         for row in all_values[header_row_idx + 1:]:
-            # 빈 행 스킵
-            if not any(row):
+            # 투자기업명(G열=인덱스 6)이 있는 행만 처리
+            company_val = row[6].strip() if len(row) > 6 else ''
+            if not company_val:
                 continue
-            # No. 컬럼이 비어있거나 '-'이면 스킵
+            # No. 값 (없으면 빈값 허용, 단 '-'이면 스킵)
             no_val = row[0].strip() if row else ''
-            if not no_val or no_val == '-':
+            if no_val == '-':
                 continue
 
             record = {}
