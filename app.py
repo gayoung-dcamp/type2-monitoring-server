@@ -15,14 +15,15 @@ CORS(app, origins=[
 # ── 구글 시트 연결 ──────────────────────────────────────────
 SHEET_ID = '15AnatVs4sauXt2FXLkqVzpmyTtVdpGRNTjmVx7VKoZ0'
 MAIN_SHEET = '펀드 투자검토보고서 업데이트 현황_20260203'
-HEADER_ROW = 10  # 헤더가 10번째 행
+POLICY_SHEET = '집중투자_정책_연도별'  # 신규: 정책 시트
+HEADER_ROW = 10  # 메인 시트의 헤더 행
 
 SCOPES = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
 
 _gc = None
 _sh = None
 
-def get_sheet():
+def get_sheet(sheet_name=MAIN_SHEET):
     global _gc, _sh
     if _gc is None:
         # Render 환경변수에서 JSON 키 읽기
@@ -37,7 +38,7 @@ def get_sheet():
         _gc = gspread.authorize(creds)
     if _sh is None:
         _sh = _gc.open_by_key(SHEET_ID)
-    return _sh.worksheet(MAIN_SHEET)
+    return _sh.worksheet(sheet_name)
 
 # ── 헬퍼 함수 ──────────────────────────────────────────────
 def clean(v):
@@ -48,9 +49,9 @@ def clean(v):
     # 제어문자 제거 (줄바꿈은 \n으로 유지)
     s = ''.join(ch if ch == '\n' or ord(ch) >= 32 else ' ' for ch in s)
     # JSON 파싱 오류 유발하는 특수 따옴표 → 일반 따옴표로 변환
-    s = s.replace('\u201c', "'").replace('\u201d', "'")  # "" → ''
-    s = s.replace('\u2018', "'").replace('\u2019', "'")  # '' → ''
-    s = s.replace('"', "'")  # 큰따옴표 → 작은따옴표
+    s = s.replace('\u201c', "'").replace('\u201d', "'")
+    s = s.replace('\u2018', "'").replace('\u2019', "'")
+    s = s.replace('"', "'")
     return s
 
 def calc_val_range(pre):
@@ -63,7 +64,7 @@ def calc_val_range(pre):
     except:
         return '', ''
 
-# 컬럼 헤더 → 인덱스 매핑 (헤더행 기준)
+# 컬럼 헤더 → 인덱스 매핑 (참조용 — 실제 동작은 헤더 검색 사용)
 COL_MAP = {
     'No.': 'A',
     '보고서 보관 위치': 'B',
@@ -82,32 +83,32 @@ COL_MAP = {
     'Post : Outstanding(발행주식수 기준)/Full-dilution(완전희석 기준)': 'O',
     '투자검토보고서 링크': 'P',
     '비고': 'Q',
-    '배치신청횟수': 'R',      # 읽기 전용
-    '배치선정 기수': 'S',     # 읽기 전용
-    '배치지원루트': 'T',      # 읽기 전용
-    '직접투자 여부 (O/X)': 'U', # 읽기 전용
-    '직접투자 일자': 'V',     # 읽기 전용
+    '배치신청횟수': 'R',
+    '배치선정 기수': 'S',
+    '배치지원루트': 'T',
+    '직접투자 여부 (O/X)': 'U',
+    '직접투자 일자': 'V',
     '디캠프 기준 산업분류': 'W',
-    '기업가치(0~150억원)': 'X',
-    '기업가치(150~360억원)': 'Y',
-    '자료 확인 여부': 'Z',
-    '확인자': 'AA',
-    '확인일자': 'AB',
-    '기업 핵심 요약': 'AC',
-    '투자포인트': 'AD',
-    '주요리스크': 'AE',
-    '기타 참고사항': 'AF',
-    '검토 시 재확인 포인트': 'AG',
-    '투자검토진행 의향': 'AH',
-    '사유': 'AI',
-    '담당자배정': 'AJ',
+    '집중투자연도': 'X',  # 신규 추가
+    '기업가치(0~150억원)': 'Y',
+    '기업가치(150~360억원)': 'Z',
+    '자료 확인 여부': 'AA',
+    '확인자': 'AB',
+    '확인일자': 'AC',
+    '기업 핵심 요약': 'AD',
+    '투자포인트': 'AE',
+    '주요리스크': 'AF',
+    '기타 참고사항': 'AG',
+    '검토 시 재확인 포인트': 'AH',
+    '투자검토진행 의향': 'AI',
+    '사유': 'AJ',
+    '담당자배정': 'AK',
 }
 
 # 읽기 전용 컬럼 (웹에서 쓰기 금지)
 READ_ONLY_COLS = {'배치신청횟수', '배치선정 기수', '배치지원루트', '직접투자 여부 (O/X)', '직접투자 일자'}
 
 def col_letter_to_index(letter):
-    """A→1, B→2, AA→27 변환"""
     result = 0
     for ch in letter.upper():
         result = result * 26 + (ord(ch) - ord('A') + 1)
@@ -123,7 +124,6 @@ def health():
 def get_data():
     """구글 시트 전체 데이터 읽기"""
     try:
-        import sys, traceback
         print("=== /api/data 요청 시작 ===", flush=True)
         ws = get_sheet()
         print("=== 시트 연결 성공 ===", flush=True)
@@ -159,7 +159,6 @@ def get_data():
 
         print(f"=== 읽은 레코드 수: {len(records)} ===", flush=True)
 
-        import json
         safe_records = []
         for rec in records:
             try:
@@ -190,7 +189,6 @@ def update_row(row_no):
         header_row_idx = HEADER_ROW - 1
         headers = all_values[header_row_idx]
 
-        # No. 컬럼으로 행 찾기
         target_row_idx = None
         for i, row in enumerate(all_values[header_row_idx + 1:], start=header_row_idx + 2):
             if row and str(row[0]).strip() == str(row_no):
@@ -200,25 +198,20 @@ def update_row(row_no):
         if target_row_idx is None:
             return jsonify({'success': False, 'error': f'No.{row_no} 행을 찾을 수 없음'}), 404
 
-        # 업데이트할 셀 목록 작성
         updates = []
         pre_val = None
-        # 사용자가 구간값(0~150, 150~360)을 명시적으로 보냈는지 추적
         user_sent_0_150 = '기업가치(0~150억원)' in body
         user_sent_150_360 = '기업가치(150~360억원)' in body
 
         for field, value in body.items():
-            # 읽기 전용 컬럼은 건너뜀
             if field in READ_ONLY_COLS:
                 continue
-            # 헤더에서 컬럼 인덱스 찾기
             if field in headers:
-                col_idx = headers.index(field) + 1  # 1-based
+                col_idx = headers.index(field) + 1
                 updates.append({'row': target_row_idx, 'col': col_idx, 'value': value})
                 if field == '기업가치(Pre, 억원)':
                     pre_val = value
 
-        # Pre 값이 바뀌면 X/Y열 자동 계산 (단, 사용자가 해당 값을 명시하지 않은 경우에만)
         if pre_val is not None:
             v0_150, v150_360 = calc_val_range(pre_val)
             auto_updates = []
@@ -231,7 +224,6 @@ def update_row(row_no):
                     col_idx = headers.index(field) + 1
                     updates.append({'row': target_row_idx, 'col': col_idx, 'value': val})
 
-        # 배치 업데이트 (API 호출 최소화)
         if updates:
             cells = [gspread.Cell(u['row'], u['col'], u['value']) for u in updates]
             ws.update_cells(cells, value_input_option='USER_ENTERED')
@@ -254,16 +246,14 @@ def add_row():
         header_row_idx = HEADER_ROW - 1
         headers = all_values[header_row_idx]
 
-        # 마지막 No. 찾아서 +1
         last_no = 0
         for row in all_values[header_row_idx + 1:]:
             if row and str(row[0]).strip().isdigit():
                 last_no = max(last_no, int(row[0].strip()))
         new_no = last_no + 1
 
-        # 새 행 데이터 구성
         new_row = [''] * len(headers)
-        new_row[0] = str(new_no)  # No. 자동 부여
+        new_row[0] = str(new_no)
 
         for field, value in body.items():
             if field in READ_ONLY_COLS:
@@ -272,7 +262,6 @@ def add_row():
                 col_idx = headers.index(field)
                 new_row[col_idx] = value
 
-        # Pre 기준 기업가치 구간 자동 계산 (단, 사용자가 해당 값을 빈 값이 아닌 값으로 명시한 경우 존중)
         pre_val = body.get('기업가치(Pre, 억원)', '')
         user_sent_0_150 = body.get('기업가치(0~150억원)', '').strip() != ''
         user_sent_150_360 = body.get('기업가치(150~360억원)', '').strip() != ''
@@ -283,7 +272,6 @@ def add_row():
             if not user_sent_150_360 and '기업가치(150~360억원)' in headers:
                 new_row[headers.index('기업가치(150~360억원)')] = v150_360
 
-        # 데이터 마지막 행 다음에 추가
         ws.append_row(new_row, value_input_option='USER_ENTERED')
 
         return jsonify({'success': True, 'no': new_no})
@@ -309,6 +297,133 @@ def delete_row(row_no):
             return jsonify({'success': False, 'error': f'No.{row_no} 행을 찾을 수 없음'}), 404
 
         ws.delete_rows(target_row_idx)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════
+# 신규: 집중투자 정책 관리 API
+# ════════════════════════════════════════════════════════════
+
+@app.route('/api/focus-policy', methods=['GET'])
+def get_focus_policy():
+    """집중투자_정책_연도별 시트 전체 읽기"""
+    try:
+        ws = get_sheet(POLICY_SHEET)
+        all_values = ws.get_all_values()
+
+        if len(all_values) < 2:
+            return jsonify({'success': True, 'policies': {}, 'years': []})
+
+        # 1행 = 헤더, 2행부터 데이터
+        # A: 연도, B: 집중투자 산업 (콤마 구분), C: 메모
+        policies = {}
+        years = []
+        for row in all_values[1:]:
+            if not row or not row[0].strip():
+                continue
+            year_str = clean(row[0]).strip()
+            if not year_str:
+                continue
+
+            industries_raw = clean(row[1]) if len(row) > 1 else ''
+            memo = clean(row[2]) if len(row) > 2 else ''
+
+            # 콤마로 분리, 공백 제거, 빈 값 제외
+            industries = [s.strip() for s in industries_raw.split(',') if s.strip()]
+
+            policies[year_str] = {
+                'year': year_str,
+                'industries': industries,
+                'memo': memo
+            }
+            years.append(year_str)
+
+        # 연도 정렬 (숫자로 변환 가능한 것만)
+        try:
+            years.sort(key=lambda x: int(x))
+        except ValueError:
+            years.sort()
+
+        return jsonify({
+            'success': True,
+            'policies': policies,
+            'years': years,
+            'current_year': years[-1] if years else None
+        })
+    except Exception as e:
+        import traceback
+        print(f"=== 정책 조회 오류: {str(e)} ===", flush=True)
+        print(traceback.format_exc(), flush=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/focus-policy/<year>', methods=['PUT'])
+def update_focus_policy(year):
+    """특정 연도의 정책 업데이트 (없으면 추가)"""
+    try:
+        body = request.json
+        if not body:
+            return jsonify({'success': False, 'error': '데이터 없음'}), 400
+
+        industries = body.get('industries', [])
+        memo = body.get('memo', '')
+
+        # industries는 리스트로 받아서 콤마 결합
+        if isinstance(industries, list):
+            industries_str = ','.join([s.strip() for s in industries if s and s.strip()])
+        else:
+            industries_str = str(industries).strip()
+
+        ws = get_sheet(POLICY_SHEET)
+        all_values = ws.get_all_values()
+
+        # 해당 연도 행 찾기
+        target_row = None
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and clean(row[0]).strip() == str(year).strip():
+                target_row = i
+                break
+
+        if target_row is None:
+            # 없으면 새 행 추가
+            ws.append_row([str(year), industries_str, memo], value_input_option='USER_ENTERED')
+            return jsonify({'success': True, 'action': 'added', 'year': year})
+        else:
+            # 있으면 업데이트
+            cells = [
+                gspread.Cell(target_row, 1, str(year)),
+                gspread.Cell(target_row, 2, industries_str),
+                gspread.Cell(target_row, 3, memo),
+            ]
+            ws.update_cells(cells, value_input_option='USER_ENTERED')
+            return jsonify({'success': True, 'action': 'updated', 'year': year})
+
+    except Exception as e:
+        import traceback
+        print(f"=== 정책 업데이트 오류: {str(e)} ===", flush=True)
+        print(traceback.format_exc(), flush=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/focus-policy/<year>', methods=['DELETE'])
+def delete_focus_policy(year):
+    """특정 연도 정책 삭제"""
+    try:
+        ws = get_sheet(POLICY_SHEET)
+        all_values = ws.get_all_values()
+
+        target_row = None
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and clean(row[0]).strip() == str(year).strip():
+                target_row = i
+                break
+
+        if target_row is None:
+            return jsonify({'success': False, 'error': f'{year}년 정책을 찾을 수 없음'}), 404
+
+        ws.delete_rows(target_row)
         return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
