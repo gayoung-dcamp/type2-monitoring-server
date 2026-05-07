@@ -106,6 +106,7 @@ COL_MAP = {
     '사유': 'AJ',
     '담당자배정': 'AK',
     '담당자 최종 의견': 'AL',
+    '검토 대기 상태': 'AM',
 }
 
 # 읽기 전용 컬럼 (웹에서 쓰기 금지)
@@ -181,7 +182,10 @@ def get_data():
 
 @app.route('/api/data/<row_no>', methods=['PUT'])
 def update_row(row_no):
-    """특정 행 업데이트 (No. 기준으로 행 찾기)"""
+    """특정 행 업데이트 (No. 기준으로 행 찾기)
+    + 자동 감지: 미제출 → 보완 (검토 대상 구간일 때만)
+    + 자동 해제: 주요내용 요약 작성 시 검토 대기 해제
+    """
     try:
         body = request.json
         if not body:
@@ -193,13 +197,21 @@ def update_row(row_no):
         headers = all_values[header_row_idx]
 
         target_row_idx = None
+        target_row_data = None  # 기존 데이터 (자동 감지용)
         for i, row in enumerate(all_values[header_row_idx + 1:], start=header_row_idx + 2):
             if row and str(row[0]).strip() == str(row_no):
                 target_row_idx = i
+                target_row_data = row
                 break
 
         if target_row_idx is None:
             return jsonify({'success': False, 'error': f'No.{row_no} 행을 찾을 수 없음'}), 404
+
+        # 기존 데이터 dict로 변환 (자동 감지용)
+        old_data = {}
+        for hi, header in enumerate(headers):
+            if header:
+                old_data[header] = (target_row_data[hi].strip() if hi < len(target_row_data) else '')
 
         updates = []
         pre_val = None
@@ -215,17 +227,75 @@ def update_row(row_no):
                 if field == '기업가치(Pre, 억원)':
                     pre_val = value
 
+        # 기업가치 자동 계산 (Pre가 변경된 경우)
+        new_v0_150 = old_data.get('기업가치(0~150억원)', '')
+        new_v150_360 = old_data.get('기업가치(150~360억원)', '')
+        if user_sent_0_150:
+            new_v0_150 = body.get('기업가치(0~150억원)', '')
+        if user_sent_150_360:
+            new_v150_360 = body.get('기업가치(150~360억원)', '')
+
         if pre_val is not None:
             v0_150, v150_360 = calc_val_range(pre_val)
             auto_updates = []
             if not user_sent_0_150:
                 auto_updates.append(('기업가치(0~150억원)', v0_150))
+                new_v0_150 = v0_150
             if not user_sent_150_360:
                 auto_updates.append(('기업가치(150~360억원)', v150_360))
+                new_v150_360 = v150_360
             for field, val in auto_updates:
                 if field in headers:
                     col_idx = headers.index(field) + 1
                     updates.append({'row': target_row_idx, 'col': col_idx, 'value': val})
+
+        # ── 검토 대기 상태 자동 감지/해제 ──────────────────────
+        if '검토 대기 상태' in headers:
+            # 1) 새 보고서 링크 / 미제출 상태
+            new_link = body.get('투자검토보고서 링크', old_data.get('투자검토보고서 링크', '')).strip()
+            old_link = old_data.get('투자검토보고서 링크', '').strip()
+
+            # 2) 검토 대상 구간 여부
+            is_in_review_range = (new_v0_150 == 'O' or new_v150_360 == 'O')
+
+            # 3) 주요내용 요약 4개 필드 (자동 해제 판단)
+            summary_fields = ['기업 핵심 요약', '투자포인트', '주요리스크', '검토 시 재확인 포인트']
+            new_summary_filled = False
+            for sf in summary_fields:
+                # body에 새 값 있으면 그것, 없으면 기존 값
+                val = body.get(sf, old_data.get(sf, '')).strip()
+                if val:
+                    new_summary_filled = True
+                    break
+
+            # 현재 검토 대기 상태
+            current_status = old_data.get('검토 대기 상태', '').strip()
+
+            # 케이스 1: 미제출 → 링크 추가 + 검토 대상 구간 → "보완됨"으로 설정
+            transition_미제출_to_링크 = (
+                old_link == '미제출' and
+                new_link.startswith('http') and
+                is_in_review_range
+            )
+
+            # 자동 해제: 보완됨 상태에서 주요내용 요약 작성 시
+            should_clear = (current_status == '보완됨' and new_summary_filled)
+
+            new_status = current_status
+            if transition_미제출_to_링크:
+                new_status = '보완됨'
+            elif should_clear:
+                new_status = ''  # 해제
+
+            # 변경된 경우에만 업데이트 큐에 추가
+            if new_status != current_status:
+                col_idx = headers.index('검토 대기 상태') + 1
+                # 기존 업데이트 큐에 같은 컬럼이 있는지 확인
+                existing = next((u for u in updates if u['col'] == col_idx), None)
+                if existing:
+                    existing['value'] = new_status
+                else:
+                    updates.append({'row': target_row_idx, 'col': col_idx, 'value': new_status})
 
         if updates:
             cells = [gspread.Cell(u['row'], u['col'], u['value']) for u in updates]
