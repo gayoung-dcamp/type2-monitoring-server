@@ -15,7 +15,9 @@ CORS(app, origins=[
 # ── 구글 시트 연결 ──────────────────────────────────────────
 SHEET_ID = '15AnatVs4sauXt2FXLkqVzpmyTtVdpGRNTjmVx7VKoZ0'
 MAIN_SHEET = '펀드 투자검토보고서 업데이트 현황_20260203'
-POLICY_SHEET = '집중투자_정책_연도별'  # 신규: 정책 시트
+POLICY_SHEET = '집중투자_정책_연도별'  # 집중투자 정책
+DOMAIN_OWNER_SHEET = '도메인_담당자_매핑'  # 산업 → 담당자 매핑
+REVIEWER_LIST_SHEET = '심사역_명단'  # 심사역 명단 (정규화)
 HEADER_ROW = 10  # 메인 시트의 헤더 행
 
 SCOPES = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/drive']
@@ -423,6 +425,232 @@ def delete_focus_policy(year):
 
         if target_row is None:
             return jsonify({'success': False, 'error': f'{year}년 정책을 찾을 수 없음'}), 404
+
+        ws.delete_rows(target_row)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+
+
+# ════════════════════════════════════════════════════════════
+# 신규: 도메인 담당자 매핑 API
+# ════════════════════════════════════════════════════════════
+
+@app.route('/api/domain-owner', methods=['GET'])
+def get_domain_owner():
+    """도메인_담당자_매핑 시트 전체 읽기"""
+    try:
+        ws = get_sheet(DOMAIN_OWNER_SHEET)
+        all_values = ws.get_all_values()
+
+        if len(all_values) < 2:
+            return jsonify({'success': True, 'mappings': {}, 'industries': []})
+
+        # 1행 = 헤더, 2행부터 데이터
+        # A: 산업분류, B: 1차 담당 심사역, C: 비고
+        mappings = {}
+        industries = []
+        for row in all_values[1:]:
+            if not row or not row[0].strip():
+                continue
+            industry = clean(row[0]).strip()
+            if not industry:
+                continue
+            owner = clean(row[1]) if len(row) > 1 else ''
+            memo = clean(row[2]) if len(row) > 2 else ''
+            mappings[industry] = {
+                'industry': industry,
+                'owner': owner,
+                'memo': memo
+            }
+            industries.append(industry)
+
+        return jsonify({
+            'success': True,
+            'mappings': mappings,
+            'industries': industries
+        })
+    except Exception as e:
+        import traceback
+        print(f"=== 도메인 담당자 조회 오류: {str(e)} ===", flush=True)
+        print(traceback.format_exc(), flush=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/domain-owner/<industry>', methods=['PUT'])
+def update_domain_owner(industry):
+    """특정 산업의 담당자 업데이트 (없으면 추가)"""
+    try:
+        body = request.json
+        if not body:
+            return jsonify({'success': False, 'error': '데이터 없음'}), 400
+
+        owner = (body.get('owner') or '').strip()
+        memo = (body.get('memo') or '').strip()
+
+        ws = get_sheet(DOMAIN_OWNER_SHEET)
+        all_values = ws.get_all_values()
+
+        # 해당 산업 행 찾기
+        target_row = None
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and clean(row[0]).strip() == str(industry).strip():
+                target_row = i
+                break
+
+        if target_row is None:
+            # 없으면 새 행 추가
+            ws.append_row([str(industry), owner, memo], value_input_option='USER_ENTERED')
+            return jsonify({'success': True, 'action': 'added', 'industry': industry})
+        else:
+            # 있으면 업데이트
+            cells = [
+                gspread.Cell(target_row, 1, str(industry)),
+                gspread.Cell(target_row, 2, owner),
+                gspread.Cell(target_row, 3, memo),
+            ]
+            ws.update_cells(cells, value_input_option='USER_ENTERED')
+            return jsonify({'success': True, 'action': 'updated', 'industry': industry})
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/domain-owner/<industry>', methods=['DELETE'])
+def delete_domain_owner(industry):
+    """특정 산업의 매핑 삭제"""
+    try:
+        ws = get_sheet(DOMAIN_OWNER_SHEET)
+        all_values = ws.get_all_values()
+
+        target_row = None
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and clean(row[0]).strip() == str(industry).strip():
+                target_row = i
+                break
+
+        if target_row is None:
+            return jsonify({'success': False, 'error': f'{industry} 매핑을 찾을 수 없음'}), 404
+
+        ws.delete_rows(target_row)
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+# ════════════════════════════════════════════════════════════
+# 신규: 심사역 명단 API
+# ════════════════════════════════════════════════════════════
+
+@app.route('/api/reviewers', methods=['GET'])
+def get_reviewers():
+    """심사역_명단 시트 전체 읽기"""
+    try:
+        ws = get_sheet(REVIEWER_LIST_SHEET)
+        all_values = ws.get_all_values()
+
+        if len(all_values) < 2:
+            return jsonify({'success': True, 'reviewers': [], 'active_names': []})
+
+        # 1행 = 헤더, 2행부터 데이터
+        # A: 심사역 ID, B: 이름, C: 상태, D: 비고
+        reviewers = []
+        active_names = []
+        for row in all_values[1:]:
+            if not row or not str(row[0]).strip():
+                continue
+            rid = clean(row[0]).strip()
+            name = clean(row[1]) if len(row) > 1 else ''
+            status = clean(row[2]) if len(row) > 2 else ''
+            memo = clean(row[3]) if len(row) > 3 else ''
+
+            if not name:
+                continue
+
+            reviewer = {
+                'id': rid,
+                'name': name,
+                'status': status,
+                'memo': memo
+            }
+            reviewers.append(reviewer)
+
+            # 재직 또는 시스템 상태인 사람만 active_names에 포함
+            if status in ('재직', '시스템'):
+                active_names.append(name)
+
+        return jsonify({
+            'success': True,
+            'reviewers': reviewers,
+            'active_names': active_names
+        })
+    except Exception as e:
+        import traceback
+        print(f"=== 심사역 명단 조회 오류: {str(e)} ===", flush=True)
+        print(traceback.format_exc(), flush=True)
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/reviewers/<reviewer_id>', methods=['PUT'])
+def update_reviewer(reviewer_id):
+    """특정 심사역 업데이트 (없으면 추가)"""
+    try:
+        body = request.json
+        if not body:
+            return jsonify({'success': False, 'error': '데이터 없음'}), 400
+
+        name = (body.get('name') or '').strip()
+        status = (body.get('status') or '재직').strip()
+        memo = (body.get('memo') or '').strip()
+
+        if not name:
+            return jsonify({'success': False, 'error': '이름은 필수'}), 400
+
+        ws = get_sheet(REVIEWER_LIST_SHEET)
+        all_values = ws.get_all_values()
+
+        target_row = None
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and clean(row[0]).strip() == str(reviewer_id).strip():
+                target_row = i
+                break
+
+        if target_row is None:
+            # 없으면 새 행 추가
+            ws.append_row([str(reviewer_id), name, status, memo], value_input_option='USER_ENTERED')
+            return jsonify({'success': True, 'action': 'added', 'id': reviewer_id})
+        else:
+            # 있으면 업데이트
+            cells = [
+                gspread.Cell(target_row, 1, str(reviewer_id)),
+                gspread.Cell(target_row, 2, name),
+                gspread.Cell(target_row, 3, status),
+                gspread.Cell(target_row, 4, memo),
+            ]
+            ws.update_cells(cells, value_input_option='USER_ENTERED')
+            return jsonify({'success': True, 'action': 'updated', 'id': reviewer_id})
+
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/reviewers/<reviewer_id>', methods=['DELETE'])
+def delete_reviewer(reviewer_id):
+    """특정 심사역 삭제 (실제로는 상태를 '퇴사'로 변경 권장)"""
+    try:
+        ws = get_sheet(REVIEWER_LIST_SHEET)
+        all_values = ws.get_all_values()
+
+        target_row = None
+        for i, row in enumerate(all_values[1:], start=2):
+            if row and clean(row[0]).strip() == str(reviewer_id).strip():
+                target_row = i
+                break
+
+        if target_row is None:
+            return jsonify({'success': False, 'error': f'심사역 ID {reviewer_id}를 찾을 수 없음'}), 404
 
         ws.delete_rows(target_row)
         return jsonify({'success': True})
